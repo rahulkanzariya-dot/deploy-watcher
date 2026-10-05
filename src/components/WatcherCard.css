@@ -34,6 +34,7 @@
 .tile-header,
 .tile-url,
 .tile-chips,
+.instance-list,
 .tile-status,
 .tile-primary-action,
 .tile-details {
@@ -128,6 +129,88 @@
   font-size: 10px;
 }
 
+.chip--env {
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  background: rgba(109, 141, 255, 0.12);
+  border-color: rgba(109, 141, 255, 0.3);
+  color: #a5b4fc;
+}
+
+.chip--env-sbox {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.35);
+  color: #93c5fd;
+}
+
+.chip--env-dev {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: #6ee7b7;
+}
+
+.chip--env-lab {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #fcd34d;
+}
+
+.chip--env-demo {
+  background: rgba(168, 85, 247, 0.12);
+  border-color: rgba(168, 85, 247, 0.35);
+  color: #d8b4fe;
+}
+
+.chip--env-prod {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+}
+
+.chip--proxy {
+  background: rgba(168, 85, 247, 0.15);
+  border-color: rgba(168, 85, 247, 0.35);
+  color: #c084fc;
+}
+
+.chip--instance {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: #fbbf24;
+}
+
+/* ---- Instance List ---- */
+.instance-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 10px;
+}
+
+.instance-list__title {
+  font-size: 11px;
+  color: var(--muted-dim);
+  font-weight: 600;
+}
+
+.instance-badge {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  color: var(--muted);
+}
+
+.instance-badge--updated {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: #4ade80;
+  font-weight: 600;
+}
+
 /* ---- Status ---- */
 .tile-status {
   display: flex;
@@ -149,52 +232,44 @@
   border: 1px solid transparent;
 }
 
-.status-badge--idle    { background: rgba(123,132,160,0.12); color: var(--muted);   border-color: rgba(123,132,160,0.2); }
-.status-badge--pending { background: rgba(255,180,84,0.12);  color: var(--pending); border-color: rgba(255,180,84,0.2); }
-.status-badge--live    { background: rgba(53,211,153,0.12);  color: var(--live);    border-color: rgba(53,211,153,0.25); }
-.status-badge--error   { background: rgba(255,107,107,0.1);  color: var(--error);   border-color: rgba(255,107,107,0.2); }
+.status-badge--idle {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--panel-border);
+  color: var(--muted);
+}
+
+.status-badge--pending {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #fbbf24;
+}
+
+.status-badge--live {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: #4ade80;
+}
+
+.status-badge--error {
+  background: rgba(255, 107, 107, 0.15);
+  border-color: rgba(255, 107, 107, 0.35);
+  color: var(--error);
+}
 
 .tile-status-sub {
   font-size: 11px;
-  color: var(--muted-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
+  color: var(--muted);
+  line-height: 1.4;
+  word-break: break-word;
 }
 
-/* ---- Primary action ---- */
+/* ---- Primary Button ---- */
 .tile-primary-action {
-  padding-bottom: 14px;
+  padding-bottom: 12px;
 }
 
 .tile-btn-full {
   width: 100%;
-  justify-content: center;
-}
-
-/* ---- Status dot ---- */
-.dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--muted);
-  flex-shrink: 0;
-  transition: background 0.3s;
-}
-
-.dot--idle    { background: var(--muted); }
-.dot--live    { background: var(--live);  box-shadow: 0 0 6px rgba(53,211,153,0.5); }
-.dot--error   { background: var(--error); box-shadow: 0 0 6px rgba(255,107,107,0.4); }
-.dot--pending {
-  background: var(--pending);
-  animation: pulse 1.4s infinite;
-}
-
-@keyframes pulse {
-  0%   { box-shadow: 0 0 0 0   rgba(255,180,84,0.6); }
-  70%  { box-shadow: 0 0 0 8px rgba(255,180,84,0); }
-  100% { box-shadow: 0 0 0 0   rgba(255,180,84,0); }
 }
 
 /* ---- Expandable log ---- */
@@ -234,7 +309,12 @@
   gap: 10px;
 }
 
-.details-section {}
+.details-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
 
 .details-label {
   font-size: 10px;
@@ -242,11 +322,16 @@
   color: var(--muted-dim);
   letter-spacing: 0.8px;
   text-transform: uppercase;
-  margin-bottom: 5px;
+}
+
+.details-hint {
+  font-size: 10px;
+  color: var(--muted-dim);
+  font-style: italic;
 }
 
 .log-box, .parsed-box {
-  max-height: 110px;
+  max-height: 120px;
   overflow-y: auto;
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 10.5px;
@@ -263,7 +348,46 @@
 .log-time { opacity: 0.55; }
 .log-empty { color: var(--muted-dim); font-style: italic; }
 
-.parsed-line { display: flex; gap: 5px; padding: 2px 0; }
-.parsed-key   { color: var(--accent); flex-shrink: 0; }
+.parsed-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.parsed-key-btn {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+  flex-shrink: 0;
+  transition: color 0.15s, transform 0.1s;
+}
+
+.parsed-key-btn:hover {
+  color: #fff;
+  text-decoration-style: solid;
+}
+
+.parsed-key-btn--active {
+  color: #4ade80;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.parsed-key-btn--active::after {
+  content: ' (tracked)';
+  font-size: 9px;
+  color: #86efac;
+  font-weight: normal;
+}
+
 .parsed-colon { color: var(--muted); }
 .parsed-value { color: var(--text); word-break: break-all; }

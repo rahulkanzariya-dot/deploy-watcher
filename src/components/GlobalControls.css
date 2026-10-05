@@ -1,7 +1,124 @@
+.global-controls-wrapper {
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Environment Filter Tabs Bar */
+.env-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 8px 14px;
+  flex-wrap: wrap;
+}
+
+.env-filter-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.env-filter-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.filter-tab {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--panel-border);
+  border-radius: 20px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+
+.filter-tab:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(109, 141, 255, 0.4);
+  color: var(--text);
+}
+
+.filter-tab--active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(109, 141, 255, 0.35);
+}
+
+.filter-tab--active:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.filter-badge {
+  background: rgba(0, 0, 0, 0.25);
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.running-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 6px #22c55e;
+  display: inline-block;
+  animation: pulse-dot 1.8s infinite;
+}
+
+@keyframes pulse-dot {
+  0% { transform: scale(0.9); opacity: 0.8; }
+  50% { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(0.9); opacity: 0.8; }
+}
+
+.btn-reset-presets {
+  background: transparent;
+  border: 1px dashed var(--panel-border);
+  border-radius: 8px;
+  color: var(--muted-dim);
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+  margin-left: auto;
+}
+
+.btn-reset-presets:hover {
+  border-color: var(--muted);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* Global Start / Stop Buttons */
 .global-controls {
   display: flex;
   gap: 10px;
-  margin-bottom: 18px;
 }
 
 .global-controls .btn {

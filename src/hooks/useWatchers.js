@@ -1,6 +1,12 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { parseResponsePayload, getValueByPath, flattenPayload } from '../utils/parser';
 import { getDomain, requestNotifyPermission, fireLiveAlert } from '../utils/notify';
+import { fetchWithFallback } from '../utils/fetcher';
+import {
+  getAllEnvironmentPresets,
+  getEnvironmentPresets,
+  detectEnvironmentFromUrl,
+} from '../utils/presets';
 
 const STORAGE_KEY = 'watchers-list';
 
@@ -11,10 +17,17 @@ function uid() {
 function loadFromStorage() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : [];
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
   } catch {
-    return [];
+    // fallback below
   }
+  // Default to ALL environments (sbox, dev, lab, demo, prod) if nothing is stored in localStorage
+  return getAllEnvironmentPresets();
 }
 
 function saveToStorage(watchers) {
@@ -26,14 +39,14 @@ function saveToStorage(watchers) {
 }
 
 /**
- * Core hook that manages all watcher state, localStorage persistence,
- * and polling logic — mirrors all functionality from the original HTML app.
+ * Core hook managing watchers, automatically adapting to:
+ * - Single-container environments (dev/local/staging)
+ * - Multi-container environments behind load balancers (prod/scaled ECS)
+ * - Static frontend builds on S3/CloudFront (with automatic CORS bypass)
  */
 export function useWatchers(showToast) {
-  // Persisted watcher configs: { id, name, url, field, interval, authHeader }
   const [watchers, setWatchers] = useState(() => loadFromStorage());
 
-  // Keep a ref in sync with the state so closures (setInterval callbacks) always see fresh data
   const watchersRef = useRef(watchers);
   function setWatchersSync(updater) {
     setWatchers((prev) => {
@@ -44,21 +57,18 @@ export function useWatchers(showToast) {
   }
 
   // Transient per-watcher runtime state (NOT persisted)
-  // { running, baseline, checkCount, lastValue, completed, log, parsedLines, statusState, statusMain, statusSub }
   const runtimeRef = useRef({});
 
-  // Initialize runtime entries for any watchers loaded from storage
   useEffect(() => {
     watchersRef.current.forEach((w) => {
       if (!runtimeRef.current[w.id]) {
         runtimeRef.current[w.id] = makeRuntime();
       }
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Force re-renders when runtime state changes
-  const [tick, setTick] = useState(0);
+  const [, setTick] = useState(0);
   const rerender = useCallback(() => setTick((t) => t + 1), []);
 
   function makeRuntime() {
@@ -69,8 +79,12 @@ export function useWatchers(showToast) {
       timerId: null,
       lastValue: null,
       completed: false,
-      log: [],       // [{ time, msg, cls }]
-      parsedLines: [], // [{ key, value }]
+      viaProxy: false,
+      instances: {},       // { [instanceId]: { id, firstSeen, lastSeen, value } }
+      baselinePool: [],    // known baseline values pool (handles multi-container start times)
+      pendingDeploy: null, // { value, count, container }
+      log: [],             // [{ time, msg, cls }]
+      parsedLines: [],     // [{ key, value }]
       statusState: 'idle',
       statusMain: 'Idle',
       statusSub: 'click Start to begin watching',
@@ -87,7 +101,7 @@ export function useWatchers(showToast) {
   function logFor(id, msg, cls = '') {
     const rt = getRT(id);
     rt.log.unshift({ time: new Date().toLocaleTimeString(), msg, cls });
-    if (rt.log.length > 30) rt.log.pop();
+    if (rt.log.length > 40) rt.log.pop();
   }
 
   function setStatus(id, state, main, sub) {
@@ -95,6 +109,19 @@ export function useWatchers(showToast) {
     rt.statusState = state;
     rt.statusMain = main;
     rt.statusSub = sub;
+  }
+
+  function completeDeploy(id, w, rt, oldVal, newVal, instanceId) {
+    const instStr = instanceId ? ` [container: ${instanceId.slice(0, 8)}]` : '';
+    logFor(id, `Deploy verified!${instStr} ${w.field}: "${oldVal}" → "${newVal}"`, 'ok');
+    logFor(id, 'Watcher stopped automatically after deploy.', 'ok');
+    fireLiveAlert(w, oldVal, newVal, showToast);
+    rt.baseline = newVal;
+    rt.baselinePool = [newVal];
+    rt.pendingDeploy = null;
+    rt.completed = true;
+    stopWatcher(id);
+    setStatus(id, 'live', 'Deployed ✅', `${w.field} changed: "${oldVal}" → "${newVal}" · watcher stopped`);
   }
 
   async function checkWatcher(id, watcherRef) {
@@ -107,42 +134,178 @@ export function useWatchers(showToast) {
     try {
       const headers = {};
       if (w.authHeader) headers['Authorization'] = w.authHeader;
-      const res = await fetch(w.url, { headers });
-      const rawText = await res.text();
 
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${rawText || 'Endpoint not found'}`);
-      }
+      // 1. Fetch with automatic CORS bypass
+      const { text: rawText, viaProxy } = await fetchWithFallback(w.url, { headers });
+      rt.viaProxy = viaProxy;
 
+      // 2. Parse payload
       const parsedPayload = parseResponsePayload(rawText);
-
-      // Update parsed lines for response preview
       rt.parsedLines = flattenPayload(parsedPayload);
 
+      // Check if instance / container ID is present
+      const rawInstance =
+        parsedPayload.type === 'text'
+          ? (parsedPayload.data.instance || parsedPayload.data.hostname || parsedPayload.data.host || parsedPayload.data.containerId || parsedPayload.data.container)
+          : (parsedPayload.data?.instance || parsedPayload.data?.hostname || parsedPayload.data?.host || parsedPayload.data?.containerId || parsedPayload.data?.container);
+      const instanceId = rawInstance ? String(rawInstance).trim() : null;
+
+      // 3. Resolve tracked field value
       const value = getValueByPath(parsedPayload, w.field);
-      if (value === undefined) throw new Error(`Field "${w.field}" not found in response`);
+      if (value === undefined) {
+        throw new Error(`Field "${w.field}" not found in response`);
+      }
 
       const printableValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
+      rt.lastValue = printableValue;
 
-      if (rt.baseline === null) {
+      // 4. Register container instance if present
+      if (instanceId) {
+        if (!rt.instances[instanceId]) {
+          rt.instances[instanceId] = {
+            id: instanceId,
+            firstSeen: Date.now(),
+            lastSeen: Date.now(),
+            value: printableValue,
+          };
+          const totalInstances = Object.keys(rt.instances).length;
+          if (rt.checkCount <= 4) {
+            logFor(
+              id,
+              `Discovered container [${instanceId.slice(0, 8)}] (${w.field}: "${printableValue}") — ${totalInstances} container${totalInstances > 1 ? 's' : ''} detected`,
+              'ok'
+            );
+          }
+        } else {
+          rt.instances[instanceId].lastSeen = Date.now();
+          rt.instances[instanceId].value = printableValue;
+        }
+      }
+
+      const knownInstances = Object.keys(rt.instances);
+      const isMultiContainer = knownInstances.length > 1;
+
+      // Determine required confirmations:
+      // In single-container environment: 1 confirmation is sufficient unless explicitly configured higher.
+      // In multi-container environment: defaults to 2 to prevent premature alert while rolling updates finish.
+      const defaultConf = isMultiContainer ? 2 : 1;
+      const requiredConfirmations = Math.max(
+        1,
+        parseInt(w.confirmations, 10) || defaultConf
+      );
+
+      if (!rt.baselinePool) rt.baselinePool = [];
+
+      // 5. Initial baseline capture (First check)
+      if (rt.baselinePool.length === 0) {
+        rt.baselinePool.push(printableValue);
         rt.baseline = printableValue;
-        rt.lastValue = printableValue;
-        logFor(id, `Baseline captured — ${w.field}: "${printableValue}"`, 'ok');
-        setStatus(id, 'pending', 'Watching…', `Baseline "${w.field}" = "${printableValue}"`);
-      } else if (printableValue !== rt.baseline) {
-        logFor(id, `CHANGE DETECTED — ${w.field}: "${rt.baseline}" → "${printableValue}"`, 'ok');
-        logFor(id, 'Watcher stopped automatically after deploy.', 'ok');
-        fireLiveAlert(w, rt.baseline, printableValue, showToast);
-        const oldVal = rt.baseline;
-        rt.baseline = printableValue;
-        rt.lastValue = printableValue;
-        rt.completed = true;
-        stopWatcher(id);
-        setStatus(id, 'live', 'Deployed ✅', `${w.field} changed: "${oldVal}" → "${printableValue}" · watcher stopped`);
+        const containerNote = instanceId ? ` (container: ${instanceId.slice(0, 8)})` : '';
+        logFor(id, `Baseline captured — ${w.field}: "${printableValue}"${containerNote}`, 'ok');
+        setStatus(id, 'pending', 'Watching…', `Baseline "${w.field}" = "${printableValue}"${containerNote}`);
+        rerender();
+        return;
+      }
+
+      // 6. Discovery window (Checks 2-4):
+      // If running in a multi-container environment where containers started at different times,
+      // register alternate baseline values into the pool to prevent false alarms:
+      if (
+        w.multiInstance !== false &&
+        rt.checkCount <= 4 &&
+        !rt.baselinePool.includes(printableValue) &&
+        rt.baselinePool.length < 5
+      ) {
+        rt.baselinePool.push(printableValue);
+        logFor(
+          id,
+          `Multi-container pool expanded (#${rt.baselinePool.length}): "${printableValue}"${instanceId ? ` [${instanceId.slice(0, 8)}]` : ''}`,
+          'ok'
+        );
+        setStatus(
+          id,
+          'pending',
+          'Watching…',
+          `${rt.baselinePool.length} containers in pool · ${w.field}: "${printableValue}"`
+        );
+        rerender();
+        return;
+      }
+
+      // 7. Evaluation: Compare against baseline pool
+      const isBaselineMatch = rt.baselinePool.includes(printableValue);
+
+      if (isBaselineMatch) {
+        // Value matches known baseline pool
+        if (rt.pendingDeploy) {
+          // If we previously saw a new deployment value, but now hit an old container:
+          // Rolling deploy is currently in progress (traffic is split between old and new containers)!
+          logFor(
+            id,
+            `Hit old baseline container (${w.field}: "${printableValue}") — waiting for remaining containers to update...`
+          );
+          setStatus(
+            id,
+            'pending',
+            'Rolling deploy in progress…',
+            `Old container still serving baseline ("${printableValue}"). Waiting for full rollout…`
+          );
+        } else {
+          // Normal steady state
+          const containerStr = isMultiContainer
+            ? ` · ${knownInstances.length} containers active`
+            : instanceId
+            ? ` · container: ${instanceId.slice(0, 8)}`
+            : '';
+          logFor(id, `Check #${rt.checkCount}: no change (${w.field}: "${printableValue}")`);
+          setStatus(
+            id,
+            'pending',
+            'No change yet',
+            `Last checked ${new Date().toLocaleTimeString()}${containerStr} · ${w.field}: "${printableValue}"`
+          );
+        }
       } else {
-        rt.lastValue = printableValue;
-        logFor(id, `Check #${rt.checkCount}: no change (${w.field}: "${printableValue}")`);
-        setStatus(id, 'pending', 'No change yet', `Last checked ${new Date().toLocaleTimeString()} · ${w.field}: "${printableValue}"`);
+        // Value is NOT in baseline pool -> A NEW DEPLOYMENT HAS BEEN DETECTED!
+        const containerStr = instanceId ? ` on [${instanceId.slice(0, 8)}]` : '';
+
+        if (!rt.pendingDeploy || rt.pendingDeploy.value !== printableValue) {
+          rt.pendingDeploy = { value: printableValue, count: 1, container: instanceId };
+          logFor(
+            id,
+            `CHANGE DETECTED — ${w.field}: "${rt.baseline}" → "${printableValue}"${containerStr} (verification 1/${requiredConfirmations})`,
+            'ok'
+          );
+
+          if (requiredConfirmations === 1) {
+            completeDeploy(id, w, rt, rt.baseline, printableValue, instanceId);
+          } else {
+            setStatus(
+              id,
+              'pending',
+              `Verifying Deploy (1/${requiredConfirmations})`,
+              `New ${w.field}: "${printableValue}" detected${containerStr}. Verifying rollout…`
+            );
+          }
+        } else {
+          rt.pendingDeploy.count++;
+          logFor(
+            id,
+            `Deploy confirmed (${rt.pendingDeploy.count}/${requiredConfirmations}): "${printableValue}"${containerStr}`,
+            'ok'
+          );
+
+          if (rt.pendingDeploy.count >= requiredConfirmations) {
+            completeDeploy(id, w, rt, rt.baseline, printableValue, instanceId);
+          } else {
+            setStatus(
+              id,
+              'pending',
+              `Verifying Deploy (${rt.pendingDeploy.count}/${requiredConfirmations})`,
+              `New ${w.field}: "${printableValue}" confirmed (${rt.pendingDeploy.count}/${requiredConfirmations})`
+            );
+          }
+        }
       }
     } catch (err) {
       logFor(id, `ERROR — ${err.message}`, 'err');
@@ -162,9 +325,12 @@ export function useWatchers(showToast) {
     rt.running = true;
     rt.completed = false;
     rt.baseline = null;
+    rt.baselinePool = [];
+    rt.instances = {};
+    rt.pendingDeploy = null;
+    rt.viaProxy = false;
     rt.checkCount = 0;
 
-    // Use a plain object ref so the interval callback always reads the latest config
     const watcherRef = { current: watcher };
 
     checkWatcher(id, watcherRef);
@@ -180,17 +346,24 @@ export function useWatchers(showToast) {
     rerender();
   }
 
-  function startAll() {
-    watchersRef.current.forEach((w) => startWatcher(w.id));
+  function startAll(targetIds) {
+    const list = Array.isArray(targetIds)
+      ? watchersRef.current.filter((w) => targetIds.includes(w.id))
+      : watchersRef.current;
+    list.forEach((w) => startWatcher(w.id));
   }
 
-  function stopAll() {
-    watchersRef.current.forEach((w) => stopWatcher(w.id));
+  function stopAll(targetIds) {
+    const list = Array.isArray(targetIds)
+      ? watchersRef.current.filter((w) => targetIds.includes(w.id))
+      : watchersRef.current;
+    list.forEach((w) => stopWatcher(w.id));
   }
 
   function addWatcher(data) {
     const id = uid();
-    const newWatcher = { id, ...data };
+    const env = data.environment || detectEnvironmentFromUrl(data.url);
+    const newWatcher = { id, environment: env, ...data };
     runtimeRef.current[id] = makeRuntime();
     setWatchersSync((prev) => {
       const updated = [...prev, newWatcher];
@@ -203,12 +376,32 @@ export function useWatchers(showToast) {
   function updateWatcher(id, data) {
     const rt = getRT(id);
     if (rt.running) stopWatcher(id);
+    const env = data.environment || (data.url ? detectEnvironmentFromUrl(data.url) : undefined);
     setWatchersSync((prev) => {
-      const updated = prev.map((w) => (w.id === id ? { ...w, ...data } : w));
+      const updated = prev.map((w) =>
+        w.id === id ? { ...w, ...(env ? { environment: env } : {}), ...data } : w
+      );
       saveToStorage(updated);
       return updated;
     });
     showToast('✅ Watcher updated');
+  }
+
+  function changeField(id, newField) {
+    const rt = getRT(id);
+    const wasRunning = rt.running;
+    if (wasRunning) stopWatcher(id);
+
+    setWatchersSync((prev) => {
+      const updated = prev.map((w) => (w.id === id ? { ...w, field: newField } : w));
+      saveToStorage(updated);
+      return updated;
+    });
+
+    showToast(`Tracking field changed to "${newField}"`);
+    if (wasRunning) {
+      setTimeout(() => startWatcher(id), 100);
+    }
   }
 
   function deleteWatcher(id) {
@@ -225,6 +418,26 @@ export function useWatchers(showToast) {
     return runtimeRef.current[id] || makeRuntime();
   }
 
+  function loadEnvironment(env) {
+    stopAll();
+    const presets = getEnvironmentPresets(env);
+    setWatchersSync(() => {
+      saveToStorage(presets);
+      return presets;
+    });
+    showToast(`Loaded ${env.toUpperCase()} environment presets`);
+  }
+
+  function resetToAllDefaults() {
+    stopAll();
+    const presets = getAllEnvironmentPresets();
+    setWatchersSync(() => {
+      saveToStorage(presets);
+      return presets;
+    });
+    showToast('Reset to all environment presets (30 endpoints)');
+  }
+
   return {
     watchers,
     getRuntime,
@@ -235,6 +448,9 @@ export function useWatchers(showToast) {
     stopAll,
     addWatcher,
     updateWatcher,
+    changeField,
+    loadEnvironment,
+    resetToAllDefaults,
     deleteWatcher,
   };
 }

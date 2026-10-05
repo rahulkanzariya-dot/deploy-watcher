@@ -1,8 +1,9 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useMemo } from 'react';
 import './index.css';
 import './App.css';
 
 import { useWatchers } from './hooks/useWatchers';
+import { detectEnvironmentFromUrl } from './utils/presets';
 import WatcherCard from './components/WatcherCard';
 import WatcherModal from './components/WatcherModal';
 import GlobalControls from './components/GlobalControls';
@@ -43,8 +44,52 @@ export default function App() {
     stopAll,
     addWatcher,
     updateWatcher,
+    changeField,
+    resetToAllDefaults,
     deleteWatcher,
   } = useWatchers(showToast);
+
+  // ---- environment filter state (default: 'all') ----
+  const [filterEnv, setFilterEnv] = useState('all');
+
+  // Filter watchers based on active environment tab
+  const filteredWatchers = useMemo(() => {
+    return watchers.filter((w) => {
+      if (filterEnv === 'all') return true;
+      const env = (w.environment || detectEnvironmentFromUrl(w.url || '')).toLowerCase();
+      return env === filterEnv.toLowerCase();
+    });
+  }, [watchers, filterEnv]);
+
+  // Aggregate counts and active running statuses per environment
+  const { countsByEnv, runningByEnv } = useMemo(() => {
+    const counts = { all: watchers.length, custom: 0 };
+    const running = { all: 0, custom: 0 };
+
+    watchers.forEach((w) => {
+      const env = (w.environment || detectEnvironmentFromUrl(w.url || '')).toLowerCase();
+      counts[env] = (counts[env] || 0) + 1;
+
+      const rt = getRuntime(w.id);
+      if (rt.running) {
+        running.all = (running.all || 0) + 1;
+        running[env] = (running[env] || 0) + 1;
+      }
+    });
+
+    return { countsByEnv: counts, runningByEnv: running };
+  }, [watchers, getRuntime]);
+
+  // Start / Stop only the currently filtered watchers
+  function handleStartFiltered() {
+    const targetIds = filteredWatchers.map((w) => w.id);
+    startAll(targetIds);
+  }
+
+  function handleStopFiltered() {
+    const targetIds = filteredWatchers.map((w) => w.id);
+    stopAll(targetIds);
+  }
 
   // ---- modal state ----
   const [modalOpen, setModalOpen] = useState(false);
@@ -119,23 +164,63 @@ export default function App() {
           </div>
         ) : null}
 
-        {/* ---- Global Controls ---- */}
-        {watchers.length > 0 && (
-          <GlobalControls onStartAll={startAll} onStopAll={stopAll} />
-        )}
+        {/* ---- Global Controls with Environment Filter Bar ---- */}
+        <GlobalControls
+          activeFilter={filterEnv}
+          onSelectFilter={setFilterEnv}
+          onStartFiltered={handleStartFiltered}
+          onStopFiltered={handleStopFiltered}
+          countsByEnv={countsByEnv}
+          runningByEnv={runningByEnv}
+          onResetAll={resetToAllDefaults}
+        />
 
         {/* ---- Watcher Tiles Grid ---- */}
         {watchers.length === 0 ? (
-          <div className="empty-state" onClick={openAddModal} style={{ cursor: 'pointer' }}>
+          <div className="empty-state">
             <div className="empty-state__icon">📡</div>
             <div className="empty-state__text">
-              No watchers yet.<br />
-              <span className="empty-cta">Click here or "+ Add Watcher" to get started.</span>
+              No watchers configured.<br />
+              <button
+                className="btn btn--primary btn--sm"
+                style={{ marginTop: '12px', marginRight: '8px' }}
+                onClick={resetToAllDefaults}
+              >
+                ⚡ Load All 30 Default Presets (All Environments)
+              </button>
+              <button
+                className="btn btn--secondary btn--sm"
+                style={{ marginTop: '12px' }}
+                onClick={openAddModal}
+              >
+                + Add Custom Watcher
+              </button>
+            </div>
+          </div>
+        ) : filteredWatchers.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-state__icon">🔍</div>
+            <div className="empty-state__text">
+              No endpoints configured for environment "{filterEnv.toUpperCase()}".<br />
+              <button
+                className="btn btn--secondary btn--sm"
+                style={{ marginTop: '12px', marginRight: '8px' }}
+                onClick={() => setFilterEnv('all')}
+              >
+                Show All Environments
+              </button>
+              <button
+                className="btn btn--primary btn--sm"
+                style={{ marginTop: '12px' }}
+                onClick={openAddModal}
+              >
+                + Add Watcher to {filterEnv.toUpperCase()}
+              </button>
             </div>
           </div>
         ) : (
           <div className="tile-grid">
-            {watchers.map((watcher) => (
+            {filteredWatchers.map((watcher) => (
               <WatcherCard
                 key={watcher.id}
                 watcher={watcher}
@@ -145,6 +230,7 @@ export default function App() {
                 onStop={stopWatcher}
                 onEdit={openEditModal}
                 onDelete={handleDelete}
+                onChangeField={changeField}
               />
             ))}
           </div>

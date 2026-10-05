@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react';
 import './Toast.css';
 
 export default function Toast({ message, visible }) {
